@@ -68,20 +68,34 @@ def Test(agent_A, agent_B=None, test_num=250, board_base_size=8, num_boards=1):
     return score
 
 
-def RunTests(Q, ref, engine, win_trace, test_num):
+def RunTests(Q, ref, engine, win_trace, test_num, eval_workers=1, engine_workers=None):
     # testing the model against random and engine
     #####################################################################
-    score_random = Test(Q, test_num=test_num)
-    win_trace['Agent_vs_Random'].append(round((score_random[0] / (score_random[0] + score_random[1])) * 100, 4))
-    # test model against pretrained reference model
-    ######################################################################
-    if ref is not None:
-        score_ref = Test(Q, ref, test_num=test_num)
-        win_trace[f"Agent_vs_{ref.name}"].append(round((score_ref[0] / (score_ref[0] + score_ref[1])) * 100, 4))
-    # test model against engine
-    #####################################################################
-    score_engine = Test(Q, engine, test_num=test_num // 2)
-    win_trace["Agent_vs_Engine"].append(round((score_engine[0] / (score_engine[0] + score_engine[1])) * 100, 4))
+    arch = (Q.internal_channels, Q.res_depth)
+    if eval_workers > 1:
+        state = {k: v.cpu() for k, v in Q.state_dict().items()}
+        score_random = TestParallel(state, arch, 'random', None, engine.depth,
+                                    engine_workers, test_num, eval_workers)
+        win_trace['Agent_vs_Random'].append(round((score_random[0] / (score_random[0] + score_random[1])) * 100, 4))
+        if ref is not None:
+            ref_state = {k: v.cpu() for k, v in ref.state_dict().items()}
+            score_ref = TestParallel(state, arch, 'model', ref_state, engine.depth,
+                                     engine_workers, test_num, eval_workers)
+            win_trace[f"Agent_vs_{ref.name}"].append(round((score_ref[0] / (score_ref[0] + score_ref[1])) * 100, 4))
+        score_engine = TestParallel(state, arch, 'engine', None, engine.depth,
+                                    engine_workers, test_num // 2, eval_workers)
+        win_trace["Agent_vs_Engine"].append(round((score_engine[0] / (score_engine[0] + score_engine[1])) * 100, 4))
+    else:
+        # test model against random
+        score_random = Test(Q, test_num=test_num)
+        win_trace['Agent_vs_Random'].append(round((score_random[0] / (score_random[0] + score_random[1])) * 100, 4))
+        # test model against pretrained reference model
+        if ref is not None:
+            score_ref = Test(Q, ref, test_num=test_num)
+            win_trace[f"Agent_vs_{ref.name}"].append(round((score_ref[0] / (score_ref[0] + score_ref[1])) * 100, 4))
+        # test model against engine
+        score_engine = Test(Q, engine, test_num=test_num // 2)
+        win_trace["Agent_vs_Engine"].append(round((score_engine[0] / (score_engine[0] + score_engine[1])) * 100, 4))
 
     results = [
         (f"{Q.name} vs random", f"{win_trace['Agent_vs_Random'][-1]}%"),
@@ -92,6 +106,53 @@ def RunTests(Q, ref, engine, win_trace, test_num):
 
     table = tabulate(results, headers=["Comparison", f"Win Rate for {Q.name}"])
     print(table)
+
+
+def _eval_worker_init(model_state, arch, kind, opp_state, engine_depth, engine_workers):
+    """Spawn-worker initializer: build the models for one eval leg.
+
+    kind: 'random' (agent vs random), 'engine' (agent vs minimax), or
+    'model' (agent vs best/ref snapshot, given by opp_state).
+    """
+    global _Q, _KIND, _OPP
+    torch.set_num_threads(1)
+    _Q = OthelloRL(internal_channels=arch[0], res_depth=arch[1], name='Q', return_val=False)
+    _Q.load_state_dict(model_state)
+    _Q.cpu().eval()
+    _KIND = kind
+    if kind == 'random':
+        _OPP = None
+    elif kind == 'engine':
+        _OPP = miniMax(name='E', depth=engine_depth, workers=engine_workers)
+    else:  # 'model'
+        _OPP = OthelloRL(internal_channels=arch[0], res_depth=arch[1], name='opp', return_val=False)
+        _OPP.load_state_dict(opp_state)
+        _OPP.cpu().eval()
+
+
+def _eval_worker_game(i):
+    """One eval game; mirrors Test() scoring (agent white on even games, black on odd)."""
+    Board = OthelloBoard(size=8)
+    if _KIND == 'random':
+        if i % 2 == 0:
+            s = Board.modelVsModel(_Q, _Q, Epsilon_2=1.0)
+        else:
+            s = Board.modelVsModel(_Q, _Q, Epsilon_1=1.0)[::-1]
+    elif i % 2 == 0:
+        s = Board.modelVsModel(_Q, _OPP)
+    else:
+        s = Board.modelVsModel(_OPP, _Q)[::-1]
+    return np.array([s[0], s[1]], dtype=float)
+
+
+def TestParallel(model_state, arch, kind, opp_state, engine_depth, engine_workers,
+                 test_num, n_workers):
+    """Parallel Test(): games split across a spawn pool; returns [agent wins, opponent wins]."""
+    ctx = mp.get_context('spawn')
+    with ctx.Pool(n_workers, initializer=_eval_worker_init,
+                  initargs=(model_state, arch, kind, opp_state, engine_depth, engine_workers)) as pool:
+        results = pool.map(_eval_worker_game, range(test_num))
+    return np.array(results).sum(axis=0)
 
 
 def fit_ppo(data_loader, agents, loss_dict, optim, scheduler, device, epochs_per_step, batch_size, echo=True):
@@ -172,7 +233,9 @@ def main():
     parser.add_argument('--epsilon-max', type=float, default=0.05)
     parser.add_argument('--epsilon-min', type=float, default=0.0)
     parser.add_argument('--scale-fac', type=float, default=4, help='controls epsilon decay rate')
-    parser.add_argument('--engine-depth', type=int, default=7, help='minimax engine depth for evaluation')
+    parser.add_argument('--engine-depth', type=int, default=9, help='minimax engine depth for evaluation')
+    parser.add_argument('--eval-workers', type=int, default=None,
+                        help='parallel eval game processes (default: min(8, cores//2); 1 = serial)')
     parser.add_argument('--seed', type=int, default=None,
                         help='random seed for reproducible runs (torch/numpy/python '
                              'RNGs and self-play)')
@@ -310,6 +373,11 @@ def main():
 
     engine = miniMax(name="E", depth=engine_depth)
 
+    # parallel eval: one process pool per leg; engine search threads scale to cores
+    eval_workers = args.eval_workers if args.eval_workers is not None \
+        else min(8, max(1, (os.cpu_count() or 1) // 2))
+    engine_workers = max(1, (os.cpu_count() or 1) // eval_workers)
+
     try:
         avg_time = 0.0
         avg_loss = 0.0
@@ -357,8 +425,16 @@ def main():
 
             if step % test_frq == 0:
                 print("\ntesting...\n")
-                RunTests(agents[0], ref, engine, win_trace, test_num)
-                score = Test(agents[0], best_model, test_num=test_num)  # new vs old
+                RunTests(agents[0], ref, engine, win_trace, test_num,
+                         eval_workers=eval_workers, engine_workers=engine_workers)
+                if eval_workers > 1:
+                    arch = (agents[0].internal_channels, agents[0].res_depth)
+                    state = {k: v.cpu() for k, v in agents[0].state_dict().items()}
+                    best_state = {k: v.cpu() for k, v in best_model.state_dict().items()}
+                    score = TestParallel(state, arch, 'model', best_state, engine.depth,
+                                         engine_workers, test_num, eval_workers)
+                else:
+                    score = Test(agents[0], best_model, test_num=test_num)  # new vs old
                 print(f"model {agents[0].name} vs {best_model.name}:  {(score[0] / (score[0] + score[1]) * 100):.04f} %.")
                 win_trace[f"{agents[0].name}_vs_{best_model.name}"].append((score[0] / (score[0] + score[1]) * 100))
                 # TensorBoard: eval win rates

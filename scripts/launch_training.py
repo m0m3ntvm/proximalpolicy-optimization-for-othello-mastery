@@ -188,7 +188,9 @@ def main():
     ap.add_argument('--test-num', type=int, default=250)
     ap.add_argument('--test-freq', type=int, default=25)
     ap.add_argument('--epochs-per-step', type=int, default=1)
-    ap.add_argument('--engine-depth', type=int, default=7)
+    ap.add_argument('--engine-depth', type=int, default=9)
+    ap.add_argument('--eval-workers', type=int, default=None,
+                    help='parallel eval game processes (default: min(8, cores//2))')
     ap.add_argument('--workers', type=int, default=None,
                     help='classic per-process workers (CPU path only; default min(16, cores))')
     ap.add_argument('--seed', type=int, default=None,
@@ -257,9 +259,11 @@ def main():
         game_per_worker = args.games_per_step // workers
 
     if probe:
+        eval_workers = args.eval_workers if args.eval_workers is not None \
+            else min(8, max(1, (os.cpu_count() or 1) // 2))
         selfplay_s = args.games_per_step / probe['games_per_s']
         test_s = estimate_test_seconds(args.test_num, args.engine_depth, args.ref_path)
-        eta_s = args.steps * (selfplay_s + test_s / args.test_freq)
+        eta_s = args.steps * (selfplay_s + test_s / args.test_freq / eval_workers)
 
     train_args = [sys.executable, str(REPO / 'scripts' / 'train.py'),
                   '--steps', str(args.steps),
@@ -272,6 +276,8 @@ def main():
                   '--engine-depth', str(args.engine_depth),
                   '--batch-games', str(batch_games),
                   '--save-dir', str(save_dir)]
+    if args.eval_workers is not None:
+        train_args += ['--eval-workers', str(args.eval_workers)]
     if args.seed is not None:
         train_args += ['--seed', str(args.seed)]
     if args.resume:

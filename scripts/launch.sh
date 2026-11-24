@@ -21,7 +21,8 @@ BATCH_GAMES="${BATCH_GAMES:-256}"         # games per batched self-play forward 
 BATCH_SIZE="${BATCH_SIZE:-512}"           # PPO mini-batch (notebook: 256)
 TEST_NUM="${TEST_NUM:-250}"
 TEST_FREQ="${TEST_FREQ:-25}"
-ENGINE_DEPTH="${ENGINE_DEPTH:-7}"
+ENGINE_DEPTH="${ENGINE_DEPTH:-9}"   # depth-9 engine: more accurate eval rung (parallelized)
+EVAL_WORKERS="${EVAL_WORKERS:-8}"   # parallel eval game processes
 SEED="${SEED:-42}"
 # Self-play is Python-bound, so a bigger net is nearly free on a 5090 and
 # raises the ceiling; for published-checkpoint parity use:
@@ -65,7 +66,8 @@ mkdir -p "$SAVE_DIR"
 
 ARGS=(--steps "$STEPS" --games-per-step "$GAMES_PER_STEP" --batch-games "$BATCH_GAMES"
       --batch-size "$BATCH_SIZE" --test-num "$TEST_NUM" --test-freq "$TEST_FREQ"
-      --engine-depth "$ENGINE_DEPTH" --seed "$SEED" --save-dir "$SAVE_DIR")
+      --engine-depth "$ENGINE_DEPTH" --eval-workers "$EVAL_WORKERS"
+      --seed "$SEED" --save-dir "$SAVE_DIR")
 if [ "$RESUME" = "1" ]; then
     ARGS+=(--resume)
 fi
