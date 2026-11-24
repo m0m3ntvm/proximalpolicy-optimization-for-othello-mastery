@@ -327,7 +327,7 @@ def main():
             if step % test_frq == 0:
                 print("\ntesting...\n")
                 RunTests(agents[0], ref, engine, win_trace, test_num)
-                score = Test(agents[0], best_model)  # new vs old
+                score = Test(agents[0], best_model, test_num=test_num)  # new vs old
                 print(f"model {agents[0].name} vs {best_model.name}:  {(score[0] / (score[0] + score[1]) * 100):.04f} %.")
                 win_trace[f"{agents[0].name}_vs_{best_model.name}"].append((score[0] / (score[0] + score[1]) * 100))
                 ##########################################
