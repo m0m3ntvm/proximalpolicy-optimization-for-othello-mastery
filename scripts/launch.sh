@@ -39,21 +39,23 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 # Fresh environment: sync from the lockfile (skip on later launches so a
-# cu128 torch upgrade is never reverted by re-syncing).
-if ! uv run python -c "import torch" 2>/dev/null; then
+# cu128 torch upgrade is never reverted by re-syncing). --no-sync is
+# essential everywhere below: `uv run` otherwise re-syncs the venv back to
+# the lockfile's cu121 torch and silently undoes the Blackwell upgrade.
+if ! uv run --no-sync python -c "import torch" 2>/dev/null; then
     uv sync --frozen || uv sync
 fi
 
 # Blackwell (sm_120) has no cu121 kernels; probe with a real kernel launch
 # and install a CUDA 12.8 build if it fails.
-if ! uv run python -c "
+if ! uv run --no-sync python -c "
 import torch
 assert torch.cuda.is_available()
 torch.zeros(4, device='cuda')
 print(f'torch {torch.__version__} (cuda {torch.version.cuda}), capability {torch.cuda.get_device_capability()}')"; then
     echo "torch cannot execute on this GPU — installing torch 2.7.1+cu128 (Blackwell)"
     uv pip install --upgrade "torch==2.7.1+cu128" --index-url https://download.pytorch.org/whl/cu128
-    uv run python -c "import torch; assert torch.cuda.is_available(); torch.zeros(4, device='cuda'); print('torch', torch.__version__, 'ready on this GPU')"
+    uv run --no-sync python -c "import torch; assert torch.cuda.is_available(); torch.zeros(4, device='cuda'); print('torch', torch.__version__, 'ready on this GPU')"
 fi
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
@@ -77,7 +79,7 @@ if [ -n "$EXTRA" ]; then
 fi
 
 # Keep the machine awake where systemd is available (no-op in containers).
-CMD=(uv run python scripts/launch_training.py "${ARGS[@]}")
+CMD=(uv run --no-sync python scripts/launch_training.py "${ARGS[@]}")
 if command -v systemd-inhibit >/dev/null 2>&1; then
     CMD=(systemd-inhibit --what=sleep:shutdown --why="SHA-ZA PPO training" "${CMD[@]}")
 fi
