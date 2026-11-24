@@ -98,7 +98,7 @@ class OthelloRL(Module):
     def load(self, path):
         # load model from path otherwise return false and print error message
         try:
-            loaded_model = torch.load(path, map_location=self.device)
+            loaded_model = torch.load(path, map_location=self.device, weights_only=False)
             self.__dict__.update(loaded_model.__dict__)  # Update current instance with loaded model's attributes
             return True
 

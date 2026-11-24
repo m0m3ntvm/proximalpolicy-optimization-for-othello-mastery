@@ -213,8 +213,13 @@ def main():
         ap.error('--resume requires an explicit --save-dir')
     save_dir = (Path(args.save_dir) if args.save_dir
                 else REPO / 'runs' / f'run_{datetime.now():%Y%m%d_%H%M%S}')
-    if save_dir.exists() and any(save_dir.iterdir()) and not args.resume:
-        sys.exit(f'{save_dir} already exists and is not empty; use --resume or a fresh --save-dir.')
+    # launch.sh may tee a launch.log here before we start; only train.py
+    # artifacts (checkpoints, log.npy, ...) make a dir "used"
+    launcher_artifacts = {'launch.log', 'config.json', 'gpu_log.csv'}
+    used = save_dir.exists() and any(p.name not in launcher_artifacts
+                                     for p in save_dir.iterdir())
+    if used and not args.resume:
+        sys.exit(f'{save_dir} already contains a training run; use --resume or a fresh --save-dir.')
     save_dir.mkdir(parents=True, exist_ok=True)
 
     kind, dev = detect_gpu()

@@ -25,7 +25,8 @@ def load_agent(path: str, device: torch.device | str = 'cpu'):
     instance with return_val=False.
     """
     install_workspace_alias()
-    loaded = torch.load(path, map_location=device)
+    # full-object pickle: weights_only must be off (torch >= 2.6 defaults it on)
+    loaded = torch.load(path, map_location=device, weights_only=False)
     loaded.to(device).eval()
     loaded.return_val = False
     loaded.device = device
