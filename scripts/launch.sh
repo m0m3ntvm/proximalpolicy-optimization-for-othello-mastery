@@ -78,9 +78,12 @@ if [ -n "$EXTRA" ]; then
     ARGS+=("${EXTRA_ARGS[@]}")
 fi
 
-# Keep the machine awake where systemd is available (no-op in containers).
+# Keep the machine awake where systemd is available. The binary exists even
+# in containers with no systemd bus, so probe that an inhibit actually works
+# before wrapping (a failed wrapper aborts the run under `set -e`).
 CMD=(uv run --no-sync python scripts/launch_training.py "${ARGS[@]}")
-if command -v systemd-inhibit >/dev/null 2>&1; then
+if command -v systemd-inhibit >/dev/null 2>&1 \
+    && systemd-inhibit --what=sleep:shutdown --why="SHA-ZA PPO training" true 2>/dev/null; then
     CMD=(systemd-inhibit --what=sleep:shutdown --why="SHA-ZA PPO training" "${CMD[@]}")
 fi
 
