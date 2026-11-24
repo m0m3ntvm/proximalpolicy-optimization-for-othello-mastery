@@ -12,6 +12,7 @@ import argparse
 import copy
 import os
 import random
+import sys
 import time
 from datetime import datetime
 
@@ -23,6 +24,11 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 from torchsummary import summary
 from tqdm import tqdm
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None  # checked in main() with a clear message
 
 from othello import OthelloBoard, OthelloRL, PPO_Loss, miniMax, parallelSelfPlay
 
@@ -177,6 +183,10 @@ def main():
     parser.add_argument('--clip-param', type=float, default=0.2)
     args = parser.parse_args()
 
+    if SummaryWriter is None:
+        sys.exit('TensorBoard logging needs the "tensorboard" package; '
+                 'install it with: uv pip install tensorboard')
+
     global criterion  # used inside fit_ppo, mirroring the notebook's module-level variable
 
     if args.seed is not None:
@@ -187,6 +197,7 @@ def main():
 
     os.makedirs(args.save_dir, exist_ok=True)
     save_path = os.path.join(args.save_dir, '')
+    tb_writer = SummaryWriter(log_dir=os.path.join(save_path, 'tb'))
 
     # Hyperparameters
     learning_rate = args.learning_rate
@@ -315,8 +326,9 @@ def main():
             print("-------------------------------------------------------------")
             print(f"Step Num : {step}/{steps}.")
             print("-------------------------------------------------------------")
+            epsilon = calcEpsilon(step, epsilon_max, epsilon_min, scale_fac, steps)
             data = parallelSelfPlay(model=agents[0], device=device, workers=num_workers,
-                                    Epsilon=calcEpsilon(step, epsilon_max, epsilon_min, scale_fac, steps),
+                                    Epsilon=epsilon,
                                     boltzmann=True, game_per_worker=game_per_worker,
                                     batch_games=args.batch_games, seed=args.seed)
             # training loader
@@ -329,7 +341,17 @@ def main():
             agents[0].cpu().eval()
             agents[1].cpu().eval()
 
-            avg_time += (time.time() - start) / test_frq  # counting the average time for an epoch
+            step_dt = time.time() - start
+            avg_time += step_dt / test_frq  # counting the average time for an epoch
+
+            # TensorBoard: per-step training metrics
+            tb_writer.add_scalar('train/total_loss', loss['total_loss'][-1], step)
+            tb_writer.add_scalar('train/policy_loss', loss['policy_loss'][-1], step)
+            tb_writer.add_scalar('train/value_loss', loss['value_loss'][-1], step)
+            tb_writer.add_scalar('train/entropy_loss', loss['entropy_loss'][-1], step)
+            tb_writer.add_scalar('train/lr', scheduler.get_last_lr()[0], step)
+            tb_writer.add_scalar('train/epsilon', epsilon, step)
+            tb_writer.add_scalar('train/step_seconds', step_dt, step)
 
             print(f"time stamp : {datetime.now()}")
 
@@ -339,6 +361,14 @@ def main():
                 score = Test(agents[0], best_model, test_num=test_num)  # new vs old
                 print(f"model {agents[0].name} vs {best_model.name}:  {(score[0] / (score[0] + score[1]) * 100):.04f} %.")
                 win_trace[f"{agents[0].name}_vs_{best_model.name}"].append((score[0] / (score[0] + score[1]) * 100))
+                # TensorBoard: eval win rates
+                tb_writer.add_scalar('eval/win_vs_random', win_trace['Agent_vs_Random'][-1], step)
+                tb_writer.add_scalar('eval/win_vs_engine', win_trace['Agent_vs_Engine'][-1], step)
+                tb_writer.add_scalar('eval/win_vs_best',
+                                     win_trace[f"{agents[0].name}_vs_{best_model.name}"][-1], step)
+                if ref is not None:
+                    tb_writer.add_scalar(f'eval/win_vs_{ref.name}',
+                                         win_trace[f"Agent_vs_{ref.name}"][-1], step)
                 ##########################################
                 time_step.append(avg_time)
                 ###########################################
@@ -367,6 +397,8 @@ def main():
                 avg_time = 0.0
                 avg_loss = 0.0
 
+            tb_writer.flush()  # near-real-time readings in TensorBoard
+
     except Exception as e:
         log = {
             "message": f"{e}",
@@ -374,6 +406,8 @@ def main():
         }
         print(log)
         np.save(os.path.join(save_path, "errorlog.npy"), log)
+
+    tb_writer.close()
 
 
 if __name__ == "__main__":
