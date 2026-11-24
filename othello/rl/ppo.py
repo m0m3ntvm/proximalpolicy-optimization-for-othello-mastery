@@ -28,9 +28,8 @@ class PPO_Loss(nn.Module):
         prob_act_new = (policy_new * actions).sum(dim=(2, 3), keepdim=True).squeeze(-1).squeeze(-1)
         ratio = prob_act_new / prob_act_old
         clipped_ratios = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param)
-        # Compute policy loss
-        policy_loss = -torch.where(torch.abs(advantages * ratio) > torch.abs(advantages * clipped_ratios), advantages * clipped_ratios, advantages * ratio)
-        policy_loss = policy_loss.mean()
+        # Compute policy loss: standard PPO clipped surrogate (min of unclipped and clipped)
+        policy_loss = -torch.minimum(advantages * ratio, advantages * clipped_ratios).mean()
         # Compute value loss
         value_loss = self.mse_loss(value_head_output, ret)
         # Compute entropy loss

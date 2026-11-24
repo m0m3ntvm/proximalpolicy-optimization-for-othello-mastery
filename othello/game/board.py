@@ -140,7 +140,11 @@ class OthelloBoard:
         with torch.no_grad():
             (x, mask), all_moves = self.getBoard()
 
-            if np.random.rand() >= epsilon:
+            if len(all_moves) == 0:
+                # no legal move: pass without consulting the model
+                I, J = None, None
+                board_change = None
+            elif np.random.rand() >= epsilon:
                 if device:
                     output_tensor = OthelloRL(torch.from_numpy(x).to(device),
                                               torch.from_numpy(mask).to(device)).cpu().numpy()
@@ -148,30 +152,29 @@ class OthelloBoard:
                     output_tensor = OthelloRL(torch.from_numpy(x),
                                               torch.from_numpy(mask)).numpy()
 
-                if len(all_moves) > 0:  # check if any move is available
+                output_tensor = np.nan_to_num(output_tensor, nan=0.0)  # guard against NaN outputs
+                probs = np.squeeze(output_tensor, axis=0)
+                if probs.sum() > 0:
                     if boltzmann:
                         # boltzmann exploration
-                        I, J = decide(probabilities=np.squeeze(output_tensor, axis=0))
+                        I, J = decide(probabilities=probs)
                     else:
                         # greedy exploration
                         max_indices = np.argmax(output_tensor.reshape(-1, output_tensor.shape[-2] * output_tensor.shape[-1]), axis=1)
                         I, J = np.divmod(max_indices, output_tensor.shape[-1])
                         I, J = I[0], J[0]
-
-                    board_change = all_moves[(I, J)]
                 else:
                     I, J = None, None
-                    board_change = None  # no move
-                    # game ends or player has no move
+
+                if I is None or (I, J) not in all_moves:
+                    # a buggy model proposed an illegal move: play a random legal move instead
+                    print(f"WARNING: model {getattr(OthelloRL, 'name', OthelloRL)} proposed illegal move {(I, J)}; playing a random legal move.")
+                    I, J = random.choice(list(all_moves.keys()))
+                board_change = all_moves[(I, J)]
             else:
                 # random exploration
-                if len(all_moves) > 0:
-                    I, J = random.choice(list(all_moves.keys()))
-                    board_change = all_moves[(I, J)]
-                else:
-                    I, J = None, None
-                    board_change = None  # no move
-                    # game ends or player has no move
+                I, J = random.choice(list(all_moves.keys()))
+                board_change = all_moves[(I, J)]
 
         game_state = self.makeMove(helpers=(x, mask), x=I, y=J, board_change=board_change,
                                    switching=switching)
@@ -199,8 +202,10 @@ class OthelloBoard:
         # given x & y this function is responsible of making moves on the board and switch player for the other turn
 
         if board_change is not None:
-            if (self.board[x, y] != 0.0):
-                print(f"{x,y} is already taken.")
+            if not (0 <= x < self.size and 0 <= y < self.size):
+                raise ValueError(f"move ({x}, {y}) is outside the board")
+            if self.board[x, y] != 0.0:
+                raise ValueError(f"move ({x}, {y}) is on an occupied square")
 
             self.last_player_moved = True
             infrence_input, mask = helpers
@@ -271,7 +276,7 @@ class OthelloBoard:
             data.append(((self.white_history[i].astype(np.float32), self.white_mask[i].astype(np.float32)), self.white_actions[i].astype(np.float32), white_return))
 
         for i in range(len(self.black_actions)):
-            black_return = 0.0 if winner == -1 else -1 ** self.black_return_scale[i].astype(np.float32) if winner else self.black_return_scale[i].astype(np.float32)
+            black_return = 0.0 if winner == -1 else -1 * self.black_return_scale[i].astype(np.float32) if winner else self.black_return_scale[i].astype(np.float32)
 
             data.append(((self.black_history[i].astype(np.float32), self.black_mask[i].astype(np.float32)), self.black_actions[i].astype(np.float32), black_return))
 
@@ -282,22 +287,22 @@ class OthelloBoard:
         # draw => false,false
         # lost => false,true
         # true,true is invalid
+        # model_1 always plays white (moves first); opening plies alternate between the models
         start, finish = start_explore  # play a random number of moves
-        start_explore_depth = random.randint(start, min(finish, 62))  # upper bound of 32
+        start_explore_depth = random.randint(start, min(finish, 62))  # upper bound of 62
         ##################################################
 
+        turn_1 = True  # model_1 to move
         for _ in range(0, start_explore_depth):
-            self.modelMove(OthelloRL_1, switching=True, epsilon=1.0, boltzmann=False)
-
-        singal = True  # true when the game ends
+            self.modelMove(OthelloRL_1 if turn_1 else OthelloRL_2, switching=True, epsilon=1.0, boltzmann=False)
+            turn_1 = not turn_1
 
         while True:
-            singal = self.modelMove(OthelloRL=OthelloRL_1, epsilon=Epsilon_1, boltzmann=boltzmann)
+            is_one = turn_1
+            singal = self.modelMove(OthelloRL=OthelloRL_1 if is_one else OthelloRL_2,
+                                    epsilon=Epsilon_1 if is_one else Epsilon_2, boltzmann=boltzmann)
             if not singal:
                 delta = evaluate(board=self.board)
-                return np.array([delta < 0, delta > 0])
-
-            singal = self.modelMove(OthelloRL=OthelloRL_2, epsilon=Epsilon_2, boltzmann=boltzmann)
-            if not singal:
-                delta = evaluate(board=self.board)
-                return np.array([delta > 0, delta < 0])
+                # the board is now from the perspective of the player who did NOT just move
+                return np.array([delta < 0, delta > 0]) if is_one else np.array([delta > 0, delta < 0])
+            turn_1 = not turn_1

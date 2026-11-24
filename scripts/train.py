@@ -44,12 +44,20 @@ def Test(agent_A, agent_B=None, test_num=250, board_base_size=8, num_boards=1):
     for i in tqdm(range(test_num), desc=f"model {agent_A.name} vs {agent_B.name if agent_B else 'random'}"):
         # change the size of the board from 8 to 10 to 12 and so on ...
         board_size = board_base_size + 2 * (i % num_boards)  # dynamic board size
-        Board = OthelloBoard()
+        Board = OthelloBoard(size=board_size)
         #########################################################
+        # alternate colours between games so the score is unbiased (agent_A
+        # plays white on even games, black on odd games)
         if agent_B:
-            score += Board.modelVsModel(agent_A, agent_B)
+            if i % 2 == 0:
+                score += Board.modelVsModel(agent_A, agent_B)
+            else:
+                score += Board.modelVsModel(agent_B, agent_A)[::-1]
         else:
-            score += Board.modelVsModel(agent_A, agent_A, Epsilon_2=1.0)
+            if i % 2 == 0:
+                score += Board.modelVsModel(agent_A, agent_A, Epsilon_2=1.0)
+            else:
+                score += Board.modelVsModel(agent_A, agent_A, Epsilon_1=1.0)[::-1]
 
     return score
 
@@ -102,8 +110,8 @@ def fit_ppo(data_loader, agents, loss_dict, optim, scheduler, device, epochs_per
             #####################
             policy_new, values = agents[0](X, Mask)  # output from the model under training
             policy_old = agents[1](X, Mask)
-            loss, policy_loss, value_loss, entropy_loss = criterion(policy_old, policy_new,
-                                                                    act.to(device), values, ret.to(device))  # calculating ppo loss
+            loss, policy_loss, value_loss, entropy_loss, _ = criterion(policy_old, policy_new,
+                                                                        act.to(device), values, ret.to(device))  # calculating ppo loss
             loss.backward()
             ############################
             avg_total_loss += loss.item()
