@@ -17,3 +17,6 @@ videos/
 
 # Launcher runs
 runs/
+
+# SSH keys (never commit private keys)
+keys/
