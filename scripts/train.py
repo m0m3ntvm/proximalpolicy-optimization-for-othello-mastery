@@ -153,6 +153,10 @@ def main():
     parser.add_argument('--test-freq', type=int, default=25, help='test every N steps')
     parser.add_argument('--game-per-worker', type=int, default=512)
     parser.add_argument('--num-workers', type=int, default=16)
+    parser.add_argument('--batch-games', type=int, default=0,
+                        help='vectorized self-play: games per batched forward '
+                             '(0 = classic per-process self-play). 64-256 is '
+                             'much faster on GPUs.')
     parser.add_argument('--epochs-per-step', type=int, default=1)
     parser.add_argument('--load-checkpoint', action='store_true', help='resume from save-dir')
     parser.add_argument('--save-dir', type=str, default='training_checkpoints',
@@ -304,7 +308,8 @@ def main():
             print("-------------------------------------------------------------")
             data = parallelSelfPlay(model=agents[0], device=device, workers=num_workers,
                                     Epsilon=calcEpsilon(step, epsilon_max, epsilon_min, scale_fac, steps),
-                                    boltzmann=True, game_per_worker=game_per_worker)
+                                    boltzmann=True, game_per_worker=game_per_worker,
+                                    batch_games=args.batch_games)
             # training loader
             train_loader = DataLoader(data, batch_size=batch_size, shuffle=True, drop_last=True)
             # train the model

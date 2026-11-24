@@ -79,9 +79,14 @@ def get_valid_moves(board):
     return legal_moves, possible_conv, move_board
 
 
-def decide(probabilities):
-    """Sample a move from a probability distribution over squares."""
+def decide(probabilities, rng=None):
+    """Sample a move from a probability distribution over squares.
+
+    rng: an np.random.RandomState / Generator to draw from (default: the
+    global numpy stream).
+    """
     probabilities = probabilities / probabilities.sum()
-    indices = np.random.choice(probabilities.size, size=1, p=probabilities.ravel())
+    indices = (rng if rng is not None else np.random).choice(
+        probabilities.size, size=1, p=probabilities.ravel())
     i, j = indices[0] // probabilities.shape[1], indices[0] % probabilities.shape[1]
     return i, j

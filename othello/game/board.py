@@ -76,15 +76,19 @@ class OthelloBoard:
         # return opponents pieces under attack
         # return the mask
         mask, under_attack, moves = get_valid_moves(self.board)
-        element = (
-            np.expand_dims(np.concatenate((np.expand_dims(self.board, axis=0), np.expand_dims(under_attack, axis=0)), axis=0), axis=0).astype(np.float32),
-            np.expand_dims(np.expand_dims(mask, axis=0), axis=0).astype(np.float32)
-        )
-        return element, moves
+        x = np.empty((1, 2, self.size, self.size), dtype=np.float32)
+        x[0, 0] = self.board
+        x[0, 1] = under_attack
+        m = np.empty((1, 1, self.size, self.size), dtype=np.float32)
+        m[0, 0] = mask
+        return (x, m), moves
 
     def switchPlayer(self) -> bool:
         self.player = not self.player
-        self.board = np.rot90(self.board, k=2) * -1
+        # rot180 is a view of the same buffer: negate in place instead of
+        # allocating a rotated copy (nothing else shares this buffer)
+        self.board = self.board[::-1, ::-1]
+        self.board *= -1
         return self.player
 
     def drawBoard(self, background_color=np.array([238, 238, 210]), boarder_color=np.array([92, 64, 51]), quality_factor=128, boarder_thickness=2, checker_size="m"):
