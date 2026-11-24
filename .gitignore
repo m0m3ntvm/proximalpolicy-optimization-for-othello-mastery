@@ -11,3 +11,6 @@ __pycache__/
 
 # Training artifacts
 training_checkpoints/
+
+# Rendered game videos
+videos/
