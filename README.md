@@ -146,18 +146,61 @@ Model checkpoints were saved at steps: 1000, 1950, 2500, 3000, 4000, 4150, 5025,
 
 ## 📦 Installation & Usage
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) (Python 3.10–3.12). PyTorch is pinned to the CUDA 12.1 build and resolved from PyTorch's own package index, configured in `pyproject.toml`.
+
 ```bash
 # Clone the repository
 git clone https://github.com/mohammed-tech-innovator/proximalpolicy-optimization-for-othello-mastery.git
 cd proximalpolicy-optimization-for-othello-mastery
 
-# Install dependencies
-pip install -r requirements.txt
+# Install uv (if not already installed)
+#   Windows:  powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+#   macOS/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Launch Jupyter Notebook
-jupyter notebook
+# Create the virtual environment and install dependencies, including Jupyter
+# (first run downloads the CUDA-enabled PyTorch wheel, ~2.4 GB; omit
+# --extra notebook on a headless training machine)
+uv sync --extra notebook
+
+# Launch Jupyter Notebook from the project environment
+uv run jupyter notebook
 ```
 Then open othello.ipynb to explore the training process or run your own experiments.
+
+## 🗂️ Project Structure
+
+The code is organized as a Python package, with the game, models, search, and RL layers separated for maintainability:
+
+```
+othello/                     # the shaza_othello package
+├── game/
+│   ├── rules.py             # numba JIT kernels: legal moves, flips, evaluation, hashing
+│   └── board.py             # OthelloBoard: state, canonicalization, self-play, matches
+├── models/
+│   ├── attention.py         # CBAM: channel + spatial attention
+│   ├── blocks.py            # ResidualBlock (ConvNeXt-style)
+│   └── agent.py             # OthelloRL (policy + value) and value_Net
+├── search/
+│   └── minimax.py           # numba alpha-beta minimax engine + transposition table
+├── rl/
+│   ├── ppo.py               # PPO_Loss (clipped surrogate + value + entropy)
+│   └── selfplay.py          # parallel self-play (asyncSelfPlay, parallelSelfPlay)
+└── checkpoint.py            # load_agent(): loads published checkpoints (handles the
+                             #   legacy 'workspace' module alias internally)
+scripts/
+├── train.py                 # training loop extracted from the notebook (same defaults)
+└── evaluate_checkpoints.py  # checkpoint evaluation harness (ladder, vs random, vs minimax)
+tests/                       # pytest suite for rules, board, minimax, models, checkpoints
+_othello.py                  # legacy compatibility shim: from othello import *
+```
+
+Run the test suite and evaluate the published checkpoints with:
+
+```bash
+uv run pytest tests/ -v
+uv run python scripts/evaluate_checkpoints.py                    # full suite, all 8 checkpoints
+uv run python scripts/evaluate_checkpoints.py --checkpoints 8    # just the final checkpoint
+```
 
 ## 📚 Citation
 

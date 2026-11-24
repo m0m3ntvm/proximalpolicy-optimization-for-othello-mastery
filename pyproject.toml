@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shaza-othello"
+version = "1.0.0"
+description = "SHA-ZA: Strategic Heuristic Agent with Zero-human Advancement for Othello Mastery Using Proximal Policy Optimization"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "GPL-3.0" }
+authors = [{ name = "Mohammed Yousif", email = "mohammed.yah.yousif@gmail.com" }]
+keywords = ["reinforcement-learning", "ppo", "othello", "self-play", "pytorch"]
+dependencies = [
+    # PyTorch with CUDA 12.1 support, resolved from the PyTorch index (see [tool.uv.sources])
+    "torch==2.3.0+cu121",
+    # numpy 1.25.2 / numba 0.58.1 / matplotlib 3.7.1 (the original requirements.txt
+    # pins) have no Python 3.12 wheels, so these are the closest 3.12-compatible
+    # equivalents — otherwise identical to the published requirements.
+    "numpy==1.26.4",
+    "numba==0.59.1",
+    "torchsummary==1.5.1",
+    "tqdm==4.66.4",
+    "tabulate==0.9.0",
+    "matplotlib==3.8.4",
+]
+
+[project.optional-dependencies]
+# Jupyter is kept out of the base environment (not needed on a headless GPU
+# training box) but available for running othello.ipynb locally.
+notebook = ["jupyter"]
+
+[tool.uv]
+# The `othello` package is installed editable by `uv sync`.
+
+[tool.setuptools]
+packages = ["othello", "othello.game", "othello.models", "othello.search", "othello.rl"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+# PyTorch wheels with CUDA 12.1 live on PyTorch's own index, not PyPI.
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
