@@ -7,7 +7,7 @@ import torch
 
 from othello.game.board import OthelloBoard
 from othello.game.rules import evaluate, get_valid_moves
-from othello.search.minimax import make_transposition_table, miniMax, minimax
+from othello.search.minimax import _gen_moves, _to_padded, make_transposition_table, miniMax, minimax
 
 
 def make_tt():
@@ -140,3 +140,40 @@ def test_tt_does_not_serve_shallow_entries_to_deeper_searches():
     value_d3, _ = minimax(board, tt, depth=3)  # same TT: must re-search, not reuse depth-2
     assert value_d3 == brute_force(board, 3)  # sound value, not the depth-2 cache
     assert value_d2 == brute_force(board, 2)
+
+
+def engine_move_set(board, own):
+    """Legal moves of `own` (in the board's frame) as (x, y) coordinates."""
+    b, P, n = _to_padded(np.asarray(board))
+    moves, flips, cnt = _gen_moves(b, own, -own, P, n)
+    return {(int(m) // P - 1, int(m) % P - 1) for m in moves[:cnt]}
+
+
+@pytest.mark.parametrize('seed', range(8))
+def test_engine_movegen_matches_rules(seed):
+    """The standalone move generator must agree with othello.game.rules on random
+    positions (this pins the rewrite of the engine's own move generation)."""
+    rng = np.random.default_rng(seed)
+    board = np.zeros((6, 6))
+    n = rng.integers(1, 30)
+    idx = rng.choice(36, n, replace=False)
+    board.flat[idx] = rng.choice(np.array([1.0, -1.0]), n)
+    for own in (1.0, -1.0):
+        mask, _, _ = get_valid_moves(board if own == 1 else -board)
+        reference = {(x, y) for x in range(6) for y in range(6) if mask[x, y]}
+        assert engine_move_set(board, own) == reference
+
+
+def test_parallel_root_matches_serial():
+    """Root-level parallelism must return the exact same value and move as the serial
+    search (first-max tie-break in the same move order)."""
+    b = OthelloBoard(size=4)
+    (x, mask), _ = b.getBoard()
+    eng_serial = miniMax(depth=5, workers=1, return_val=True)
+    eng_parallel = miniMax(depth=5, workers=4, parallel_depth=5, return_val=True)
+    (out_s, val_s), (out_p, val_p) = (
+        eng_serial(torch.from_numpy(x), torch.from_numpy(mask)),
+        eng_parallel(torch.from_numpy(x), torch.from_numpy(mask)),
+    )
+    assert torch.equal(out_s, out_p)
+    assert val_s == val_p
