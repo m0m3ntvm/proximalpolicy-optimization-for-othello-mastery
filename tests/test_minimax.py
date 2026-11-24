@@ -7,7 +7,7 @@ import torch
 
 from othello.game.board import OthelloBoard
 from othello.game.rules import evaluate, get_valid_moves
-from othello.search.minimax import _gen_moves, _to_padded, make_transposition_table, miniMax, minimax
+from othello.search.minimax import _gen_moves, _search, _to_padded, make_transposition_table, miniMax, minimax
 
 
 def make_tt():
@@ -177,3 +177,22 @@ def test_parallel_root_matches_serial():
     )
     assert torch.equal(out_s, out_p)
     assert val_s == val_p
+
+
+def test_tt_cap_bounds_memory_and_stays_exact():
+    """Once the table hits its cap the search stops inserting (never thrash-clears
+    mid-search); memory stays bounded and the value stays exactly the uncapped one."""
+    b = OthelloBoard(size=8)
+    random.seed(4)
+    dummy = miniMax(depth=1, workers=1)
+    for _ in range(20):
+        b.modelMove(dummy, epsilon=1.0, boltzmann=False)
+    padded, P, n = _to_padded(b.board.astype(np.float64))
+
+    tt_small = make_tt()
+    value_small, move_small = _search(padded, tt_small, P, n, 7, True, -np.inf, np.inf, cap=2000)
+    assert len(tt_small) <= 2000
+    value_full, move_full = _search(padded, make_tt(), P, n, 7, True, -np.inf, np.inf,
+                                    cap=10 ** 9)
+    assert value_small == value_full  # a full table is a pure cache: no value change
+    assert move_small == move_full

@@ -43,6 +43,12 @@ _ZOBRIST_RNG = np.random.default_rng(_ZOBRIST_SEED)
 _Z1 = _ZOBRIST_RNG.integers(1, 2 ** 63, size=(256, 3), dtype=np.int64)
 _Z2 = _ZOBRIST_RNG.integers(1, 2 ** 63, size=(256, 3), dtype=np.int64)
 
+# Hard cap on table entries: once full, the search keeps reading existing entries
+# but stops inserting (a frozen full table beats clear-and-refill thrash). Deep
+# searches saturate the table within a single move, so the wrapper clears it
+# between moves. The table is a pure cache — the cap never changes search values.
+_TT_MAX_ENTRIES = 500_000
+
 TT_VALUE_TYPE = numba.types.Tuple((
     numba.types.float64,   # exact score in the root player's frame
     numba.types.int64,     # best move (flat padded index, -1 = pass)
@@ -162,11 +168,13 @@ def _score(b, P, n):
 
 
 @njit(cache=True, nogil=True)
-def _search(b, tt, P, n, depth, maximizing, alpha, beta):
+def _search(b, tt, P, n, depth, maximizing, alpha, beta, cap):
     """Alpha-beta minimax on a padded board, with a depth-tagged transposition table.
 
     The board is always in the root player's frame; `maximizing` says whose turn it
-    is. Values returned are exact (full-window) scores in the root frame.
+    is. Values returned are exact (full-window) scores in the root frame. `cap`
+    bounds the table size: once full, entries are read but no longer inserted, so
+    memory stays bounded and the table never thrash-clears mid-search.
     """
     if depth == 0:
         return _score(b, P, n), -1
@@ -181,7 +189,8 @@ def _search(b, tt, P, n, depth, maximizing, alpha, beta):
 
     if empties == 0:
         s = _score(b, P, n)
-        tt.update({key: (s, -1, maximizing, depth)})
+        if len(tt) < cap:
+            tt.update({key: (s, -1, maximizing, depth)})
         return s, -1
 
     own = 1 if maximizing else -1
@@ -190,8 +199,9 @@ def _search(b, tt, P, n, depth, maximizing, alpha, beta):
 
     if cnt == 0:
         # no legal move: pass (the opponent moves on the same board)
-        value, _ = _search(b, tt, P, n, depth - 1, not maximizing, alpha, beta)
-        tt.update({key: (value, -1, maximizing, depth)})
+        value, _ = _search(b, tt, P, n, depth - 1, not maximizing, alpha, beta, cap)
+        if len(tt) < cap:
+            tt.update({key: (value, -1, maximizing, depth)})
         return value, -1
 
     _order_moves(moves, flips, cnt)
@@ -201,7 +211,7 @@ def _search(b, tt, P, n, depth, maximizing, alpha, beta):
     for i in range(cnt):
         child = np.copy(b)
         _apply(child, moves[i], own, opp, P)
-        v, _ = _search(child, tt, P, n, depth - 1, not maximizing, alpha, beta)
+        v, _ = _search(child, tt, P, n, depth - 1, not maximizing, alpha, beta, cap)
         if maximizing:
             if v > best:
                 best = v
@@ -219,7 +229,8 @@ def _search(b, tt, P, n, depth, maximizing, alpha, beta):
             if beta <= alpha:
                 break
 
-    tt.update({key: (best, best_move, maximizing, depth)})
+    if len(tt) < cap:
+        tt.update({key: (best, best_move, maximizing, depth)})
     return best, best_move
 
 
@@ -236,7 +247,8 @@ def minimax(board, transposition_table, depth: int = 3, maximizing_player: bool 
     """Compatibility shim over the optimized kernels: search a 2D board from the
     root player's frame and return (value, (x, y)), with (0, 0) for a pass."""
     b, P, n = _to_padded(np.asarray(board))
-    value, move = _search(b, transposition_table, P, n, depth, maximizing_player, alpha, beta)
+    value, move = _search(b, transposition_table, P, n, depth, maximizing_player, alpha, beta,
+                          _TT_MAX_ENTRIES)
     x, y = _move_xy(move, P)
     return value, (x, y)
 
@@ -274,12 +286,15 @@ class miniMax(nn.Module):
 
         def task(i):
             tt = getattr(tls, 'tt', None)
-            if tt is None or len(tt) > 200000:
+            if tt is None:
                 tt = make_transposition_table()
                 tls.tt = tt
+            elif len(tt) >= _TT_MAX_ENTRIES:
+                tt.clear()  # saturated by a previous subtree: start fresh
             child = np.copy(b)
             _apply(child, moves[i], 1, -1, P)
-            return _search(child, tt, P, n, depth - 1, False, -np.inf, np.inf)[0]
+            return _search(child, tt, P, n, depth - 1, False, -np.inf, np.inf,
+                           _TT_MAX_ENTRIES)[0]
 
         vals = self._pool.map(task, range(cnt))
         best = -np.inf
@@ -299,7 +314,8 @@ class miniMax(nn.Module):
 
         if not self._warmed:
             # compile every kernel on this (single-threaded) first call
-            _search(b, make_transposition_table(), P, n, 1, True, -np.inf, np.inf)
+            _search(b, make_transposition_table(), P, n, 1, True, -np.inf, np.inf,
+                    _TT_MAX_ENTRIES)
             self._warmed = True
 
         moves, flips, cnt = _gen_moves(b, 1, -1, P, n)
@@ -307,12 +323,12 @@ class miniMax(nn.Module):
 
         if cnt == 0 or self.depth < self.parallel_depth or self.workers == 1:
             value, move = _search(b, self.transposition_table, P, n, self.depth, True,
-                                  -np.inf, np.inf)
+                                  -np.inf, np.inf, _TT_MAX_ENTRIES)
         else:
             value, move = self._search_root_parallel(b, P, n, moves, cnt)
 
-        if len(self.transposition_table) > 500000:
-            self.transposition_table.clear()  # bound memory across long matches
+        if len(self.transposition_table) >= _TT_MAX_ENTRIES:
+            self.transposition_table.clear()  # saturated: start fresh next move
 
         x, y = _move_xy(move, P)
         result = torch.zeros((1, 1, n, n))
