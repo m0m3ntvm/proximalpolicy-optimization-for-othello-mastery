@@ -167,6 +167,9 @@ def main():
     parser.add_argument('--epsilon-min', type=float, default=0.0)
     parser.add_argument('--scale-fac', type=float, default=4, help='controls epsilon decay rate')
     parser.add_argument('--engine-depth', type=int, default=7, help='minimax engine depth for evaluation')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='random seed for reproducible runs (torch/numpy/python '
+                             'RNGs and self-play)')
     parser.add_argument('--internal-channels', type=int, default=64)
     parser.add_argument('--policy-net-depth', type=int, default=8)
     parser.add_argument('--value-coefficient', type=float, default=0.5)
@@ -175,6 +178,12 @@ def main():
     args = parser.parse_args()
 
     global criterion  # used inside fit_ppo, mirroring the notebook's module-level variable
+
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
+        random.seed(args.seed)
+        print(f"random seed : {args.seed} (torch/numpy/python RNGs and self-play).")
 
     os.makedirs(args.save_dir, exist_ok=True)
     save_path = os.path.join(args.save_dir, '')
@@ -309,7 +318,7 @@ def main():
             data = parallelSelfPlay(model=agents[0], device=device, workers=num_workers,
                                     Epsilon=calcEpsilon(step, epsilon_max, epsilon_min, scale_fac, steps),
                                     boltzmann=True, game_per_worker=game_per_worker,
-                                    batch_games=args.batch_games)
+                                    batch_games=args.batch_games, seed=args.seed)
             # training loader
             train_loader = DataLoader(data, batch_size=batch_size, shuffle=True, drop_last=True)
             # train the model
