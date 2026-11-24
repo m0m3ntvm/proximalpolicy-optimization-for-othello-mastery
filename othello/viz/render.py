@@ -162,7 +162,8 @@ def _title_card(W, H, title, alpha):
     return (img.astype(np.float64) * alpha).astype(np.uint8)
 
 
-def _draw_panel(img, panel_x, W, H, q, title, ply, total, wc, bc, white_to_move, is_opening, n):
+def _draw_panel(img, panel_x, panel_w, W, H, q, title, ply, total, wc, bc,
+                white_to_move, is_opening, n):
     pil = Image.fromarray(img)
     d = ImageDraw.Draw(pil)
     d.rounded_rectangle([panel_x, 0, W, H], radius=14, fill=_PANEL)
@@ -181,7 +182,7 @@ def _draw_panel(img, panel_x, W, H, q, title, ply, total, wc, bc, white_to_move,
     if total:
         track = [panel_x + pad, y, W - pad, y + 6]
         d.rounded_rectangle(track, radius=3, fill=(60, 64, 78))
-        fill_w = int((W - 2 * pad) * (ply / max(1, total)))
+        fill_w = int((panel_w - 2 * pad) * (ply / max(1, total)))
         d.rounded_rectangle([panel_x + pad, y, panel_x + pad + fill_w, y + 6],
                             radius=3, fill=(90, 190, 130))
         y += 14
@@ -197,7 +198,7 @@ def _draw_panel(img, panel_x, W, H, q, title, ply, total, wc, bc, white_to_move,
                   outline=_MUTED)
         d.text((panel_x + pad + 24, y), f"{name} {count}", font=_font(16), fill=_TEXT)
         bar_x = panel_x + pad + 96
-        bar_max = W - 2 * pad - 96
+        bar_max = panel_w - 2 * pad - 96  # bars must end inside the panel (W - pad)
         d.rounded_rectangle([bar_x, y + 5, bar_x + bar_max, y + 15], radius=5,
                             outline=_MUTED)
         d.rounded_rectangle([bar_x, y + 5, bar_x + int(bar_max * count / (n * n)), y + 15],
@@ -310,7 +311,7 @@ def _frame_between(before, after, t, total, q, title):
 
     wc = int(round(before['white_count'] + (after['white_count'] - before['white_count']) * t))
     bc = int(round(before['black_count'] + (after['black_count'] - before['black_count']) * t))
-    _draw_panel(img, H + margin, W, H, q, title, after['ply'], total,
+    _draw_panel(img, H + margin, panel_w, W, H, q, title, after['ply'], total,
                 wc, bc, after['white_to_move'], after['is_opening'], n)
     return img
 

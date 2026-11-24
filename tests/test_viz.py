@@ -78,6 +78,18 @@ def test_render_game_frames(agents):
     assert not np.array_equal(frames[0], frames[-1])  # the game progressed
 
 
+def test_panel_bars_stay_inside_panel(agents):
+    """The count bars and progress fill must end inside the score panel —
+    an earlier bug sized them against the full canvas width, so they ran past
+    the right edge of the video and were clipped."""
+    a, b = agents
+    result, states = play_game(a, b)  # full 8x8
+    frames = render_game(states, quality=16)
+    for f in frames[1:]:
+        # last columns inside the panel: nothing may draw over the panel card
+        assert np.all(f[30:-30, -5:-2] == (42, 46, 58))
+
+
 def test_render_animation_frames(agents):
     a, b = agents
     result, states = play_game(a, b, board=OthelloBoard(size=4))
