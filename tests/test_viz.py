@@ -8,8 +8,8 @@ from PIL import Image
 
 from othello.game.board import OthelloBoard
 from othello.search.minimax import miniMax
-from othello.viz import (display_board, play_game, render_game, visualize_game,
-                         write_gif, write_video)
+from othello.viz import (display_board, play_game, render_animation, render_game,
+                         visualize_game, write_gif, write_video)
 
 
 @pytest.fixture
@@ -74,8 +74,25 @@ def test_render_game_frames(agents):
     assert len(frames) == len(states)
     f0 = frames[0]
     assert f0.dtype == np.uint8 and f0.ndim == 3 and f0.shape[2] == 3
-    assert f0.shape[0] == 4 * 16
+    assert f0.shape[0] >= 4 * 16  # board plus frame borders
     assert not np.array_equal(frames[0], frames[-1])  # the game progressed
+
+
+def test_render_animation_frames(agents):
+    a, b = agents
+    result, states = play_game(a, b, board=OthelloBoard(size=4))
+    fps, interp, hold, card = 10, 4, 2.0, 1.5
+    frames = render_animation(states, fps=fps, interp=interp, quality=16,
+                              title="a vs b", winner=1)
+    expected = int(fps * card) + (len(states) - 1) * interp + int(fps * hold)
+    assert len(frames) == expected
+    f0 = frames[0]
+    assert f0.dtype == np.uint8 and f0.ndim == 3 and f0.shape[2] == 3
+    assert all(f.shape == f0.shape for f in frames)
+    first_move = int(fps * card)  # skip the title card
+    assert not np.array_equal(frames[first_move], frames[first_move + 1])  # motion
+    hold_n = int(fps * hold)
+    assert not np.array_equal(frames[-hold_n - 1], frames[-1])  # winner overlay appears
 
 
 def test_write_gif_roundtrip(agents, tmp_path):
@@ -102,8 +119,9 @@ def test_write_mp4_roundtrip(agents, tmp_path):
 def test_visualize_game_pipeline(tmp_path):
     a = miniMax(depth=1, workers=1)
     result, path = visualize_game(a, a, out=str(tmp_path / "match.gif"), seed=3,
-                                  board=OthelloBoard(size=4), quality=16, fps=4)
+                                  board=OthelloBoard(size=4), quality=16,
+                                  fps=4, interp=2)
     assert len(result) == 2
     assert os.path.exists(path)
     with Image.open(path) as im:
-        assert im.n_frames >= 4  # one per ply + held final frame
+        assert im.n_frames >= 4  # title card + interpolated plies + held final frame

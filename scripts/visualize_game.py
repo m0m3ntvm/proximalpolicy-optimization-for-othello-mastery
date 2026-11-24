@@ -30,7 +30,10 @@ def main():
     ap.add_argument('--white', default='ckpt:8', help="white agent: ckpt:N or minimax:D (default ckpt:8)")
     ap.add_argument('--black', default='minimax:7', help="black agent: ckpt:N or minimax:D (default minimax:7)")
     ap.add_argument('--out', default='videos/game.mp4', help='output path, .mp4 or .gif (default videos/game.mp4)')
-    ap.add_argument('--fps', type=float, default=2.0, help='frames per second (default 2)')
+    ap.add_argument('--fps', type=float, default=None,
+                    help='frames per second (default 12 for mp4, 4 for gif)')
+    ap.add_argument('--interp', type=int, default=None,
+                    help='interpolated frames per ply (default 6 for mp4, 2 for gif)')
     ap.add_argument('--quality', type=int, default=64, help='pixels per board cell (default 64)')
     ap.add_argument('--opening', type=int, nargs=2, default=(0, 32), metavar=('LO', 'HI'),
                     help='random-opening ply range (default 0 32)')
@@ -43,6 +46,10 @@ def main():
     agent_w = parse_agent(args.white)
     agent_b = parse_agent(args.black)
 
+    is_gif = args.out.lower().endswith('.gif')
+    fps = args.fps if args.fps is not None else (4.0 if is_gif else 12.0)
+    interp = args.interp if args.interp is not None else (2 if is_gif else 6)
+
     for g in range(args.games):
         if args.seed is not None:
             random.seed(args.seed + g)  # each game gets its own reproducible opening
@@ -50,7 +57,7 @@ def main():
         if args.games > 1:
             stem, ext = os.path.splitext(out)
             out = f"{stem}-{g + 1}{ext}"
-        result, path = visualize_game(agent_w, agent_b, out=out, fps=args.fps,
+        result, path = visualize_game(agent_w, agent_b, out=out, fps=fps, interp=interp,
                                       start_explore=tuple(args.opening),
                                       Epsilon_1=args.epsilon_white,
                                       Epsilon_2=args.epsilon_black,
