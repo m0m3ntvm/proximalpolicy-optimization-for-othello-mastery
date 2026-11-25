@@ -84,6 +84,17 @@ class OthelloRL(Module):
             nn.Tanh(),
         )
 
+    def features(self, input):
+        """Trunk feature map + pre-softmax policy logits (MAE hook).
+
+        Mirrors the first half of forward() so pretrain_mae.py can read the
+        shared encoder's trunk without reaching into submodules. The other
+        encoder architectures expose the same method.
+        """
+        trunk = self.ResidualBlock(self.InConv(input))
+        logits = self.OutConv(trunk)
+        return trunk, logits
+
     ##############################
     def forward(self, input, mask):
         x = input

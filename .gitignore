@@ -23,3 +23,6 @@ keys/
 
 # Distillation data shards
 data/
+
+# Local smoke-run artifacts
+checkpoints/smoke_*.pth

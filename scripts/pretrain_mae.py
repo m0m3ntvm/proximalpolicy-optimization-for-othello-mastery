@@ -34,17 +34,22 @@ import numpy as np
 import torch
 from torch import nn
 
-from othello import OthelloRL
+from othello.models.factory import make_agent
 
 
 class MAEModel(nn.Module):
-    """OthelloRL encoder + a small 3D-conv decoder that sees all frames."""
+    """Encoder (any architecture from the factory) + a small 3D-conv decoder
+    that sees all frames. The encoder is only touched through its public
+    contract: features(x) -> (trunk map, pre-softmax logits) and
+    forward(x, mask) -> (masked-softmax policy, value)."""
 
-    def __init__(self, internal_channels, res_depth):
+    def __init__(self, arch, internal_channels, res_depth, model_dim, n_layers):
         super().__init__()
-        self.encoder = OthelloRL(internal_channels=internal_channels,
-                                 res_depth=res_depth, name='mae', return_val=True)
-        C = internal_channels
+        self.encoder = make_agent(arch=arch, internal_channels=internal_channels,
+                                  res_depth=res_depth, model_dim=model_dim,
+                                  n_layers=n_layers, name='mae', return_val=True)
+        C = getattr(self.encoder, 'trunk_channels', None) \
+            or getattr(self.encoder, 'internal_channels', None)
         self.decoder = nn.Sequential(
             nn.Conv3d(C + 1, C, kernel_size=3, padding=1),
             nn.GroupNorm(num_groups=4, num_channels=C, affine=True),
@@ -57,16 +62,13 @@ class MAEModel(nn.Module):
 
     def forward(self, x, mask, keep):
         """x: (B, L, 2, 8, 8), mask: (B, L, 1, 8, 8), keep: (B, L, 1, 8, 8) 1=visible.
-        Returns (policy, value, recon_logits)."""
+        Returns (logits, policy, value, recon_logits)."""
         B, L = x.shape[:2]
         x_masked = x * keep
         xf = x_masked.view(B * L, 2, 8, 8)
-        trunk = self.encoder.ResidualBlock(self.encoder.InConv(xf))
-        logits = self.encoder.OutConv(trunk)
         mf = mask.view(B * L, 1, 8, 8)
-        masked = logits * mf + (1 - mf) * -1e32
-        policy = self.encoder.softmax(masked.view(B * L, -1)).view(B * L, 1, 8, 8)
-        value = self.encoder.value_head(torch.cat((trunk, policy), axis=1))
+        trunk, logits = self.encoder.features(xf)
+        policy, value = self.encoder.forward(xf, mf)
         # Conv3d layout (B, C, L, H, W): move the frame dim into channel position
         feats3 = trunk.view(B, L, -1, 8, 8).permute(0, 2, 1, 3, 4)
         keep3 = keep.permute(0, 2, 1, 3, 4)
@@ -128,10 +130,17 @@ def main():
     ap.add_argument('--future-frames', type=int, default=3,
                     help='trailing frames of each chunk masked completely')
     ap.add_argument('--max-samples', type=int, default=None)
+    ap.add_argument('--arch', type=str, default='convnext',
+                    choices=('convnext', 'vim', 'xlstm'),
+                    help='encoder architecture (must match train.py --arch)')
     ap.add_argument('--internal-channels', type=int, default=128,
-                    help='must match train.py launch flags')
+                    help='convnext arch: must match train.py launch flags')
     ap.add_argument('--policy-net-depth', type=int, default=16,
-                    help='must match train.py launch flags')
+                    help='convnext arch: must match train.py launch flags')
+    ap.add_argument('--model-dim', type=int, default=192,
+                    help='vim/xlstm arch: token embedding width')
+    ap.add_argument('--layers', type=int, default=8,
+                    help='vim/xlstm arch: number of SSM/LSTM blocks')
     ap.add_argument('--out', type=str, default='checkpoints/mae_pretrain.pth')
     ap.add_argument('--seed', type=int, default=42)
     args = ap.parse_args()
@@ -148,10 +157,14 @@ def main():
     tr_idx, va_idx = perm[n_val:], perm[:n_val]
     print(f'{n} chunks of {L} frames ({len(tr_idx)} train / {len(va_idx)} val).')
 
-    model = MAEModel(args.internal_channels, args.policy_net_depth).to(device)
+    model = MAEModel(args.arch, args.internal_channels, args.policy_net_depth,
+                     args.model_dim, args.layers).to(device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f'architecture: {args.internal_channels} channels x {args.policy_net_depth} '
-          f'blocks ({n_params / 1e6:.1f}M params incl. decoder).')
+    arch_desc = (f'{args.internal_channels} channels x {args.policy_net_depth} blocks'
+                 if args.arch == 'convnext' else
+                 f'{args.model_dim} dim x {args.layers} layers')
+    print(f'architecture: {args.arch} ({arch_desc}, {n_params / 1e6:.1f}M params '
+          f'incl. decoder).')
 
     optim = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=max(1, args.epochs // 2),

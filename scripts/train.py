@@ -31,6 +31,7 @@ except ImportError:
     SummaryWriter = None  # checked in main() with a clear message
 
 from othello import OthelloBoard, OthelloRL, PPO_Loss, miniMax, parallelSelfPlay
+from othello.models.factory import make_agent, make_from_spec
 
 
 def calcEpsilon(step, epsilon_max, epsilon_min, scale_fac, steps):
@@ -71,7 +72,7 @@ def Test(agent_A, agent_B=None, test_num=250, board_base_size=8, num_boards=1):
 def RunTests(Q, ref, engine, win_trace, test_num, eval_workers=1, engine_workers=None):
     # testing the model against random and engine
     #####################################################################
-    arch = (Q.internal_channels, Q.res_depth)
+    arch = getattr(Q, 'arch_spec', None) or (Q.internal_channels, Q.res_depth)
     if eval_workers > 1:
         state = {k: v.cpu() for k, v in Q.state_dict().items()}
         score_random = TestParallel(state, arch, 'random', None, engine.depth,
@@ -112,11 +113,12 @@ def _eval_worker_init(model_state, arch, kind, opp_state, engine_depth, engine_w
     """Spawn-worker initializer: build the models for one eval leg.
 
     kind: 'random' (agent vs random), 'engine' (agent vs minimax), or
-    'model' (agent vs best/ref snapshot, given by opp_state).
+    'model' (agent vs best/ref snapshot, given by opp_state). `arch` is an
+    arch_spec tuple resolved through the encoder factory.
     """
     global _Q, _KIND, _OPP
     torch.set_num_threads(1)
-    _Q = OthelloRL(internal_channels=arch[0], res_depth=arch[1], name='Q', return_val=False)
+    _Q = make_from_spec(arch, name='Q', return_val=False)
     _Q.load_state_dict(model_state)
     _Q.cpu().eval()
     _KIND = kind
@@ -125,7 +127,7 @@ def _eval_worker_init(model_state, arch, kind, opp_state, engine_depth, engine_w
     elif kind == 'engine':
         _OPP = miniMax(name='E', depth=engine_depth, workers=engine_workers)
     else:  # 'model'
-        _OPP = OthelloRL(internal_channels=arch[0], res_depth=arch[1], name='opp', return_val=False)
+        _OPP = make_from_spec(arch, name='opp', return_val=False)
         _OPP.load_state_dict(opp_state)
         _OPP.cpu().eval()
 
@@ -245,6 +247,15 @@ def main():
                              'RNGs and self-play)')
     parser.add_argument('--internal-channels', type=int, default=64)
     parser.add_argument('--policy-net-depth', type=int, default=8)
+    parser.add_argument('--arch', type=str, default='convnext',
+                        choices=('convnext', 'vim', 'xlstm'),
+                        help='encoder architecture (--internal-channels/'
+                             '--policy-net-depth apply to convnext; '
+                             '--model-dim/--layers to vim/xlstm)')
+    parser.add_argument('--model-dim', type=int, default=192,
+                        help='vim/xlstm token embedding width')
+    parser.add_argument('--layers', type=int, default=8,
+                        help='vim/xlstm number of SSM/LSTM blocks')
     parser.add_argument('--value-coefficient', type=float, default=0.5)
     parser.add_argument('--entropy-coefficient', type=float, default=0.09)
     parser.add_argument('--clip-param', type=float, default=0.2)
@@ -297,9 +308,13 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Your current device is: {device}.")
 
-    # Create 2 instances of OthelloRL (new = training, old = behavior policy)
-    agents = [OthelloRL(internal_channels=internal_channels, res_depth=policy_net_depth, name="new", return_val=True),
-              OthelloRL(internal_channels=internal_channels, res_depth=policy_net_depth, name="old", return_val=True)]
+    # Create 2 instances of the encoder (new = training, old = behavior policy)
+    agents = [make_agent(arch=args.arch, internal_channels=internal_channels,
+                         res_depth=policy_net_depth, model_dim=args.model_dim,
+                         n_layers=args.layers, name="new", return_val=True),
+              make_agent(arch=args.arch, internal_channels=internal_channels,
+                         res_depth=policy_net_depth, model_dim=args.model_dim,
+                         n_layers=args.layers, name="old", return_val=True)]
 
     if args.init_path:
         # warm start both agents from distilled weights (policy + value heads);
@@ -440,7 +455,8 @@ def main():
                 RunTests(agents[0], ref, engine, win_trace, test_num,
                          eval_workers=eval_workers, engine_workers=engine_workers)
                 if eval_workers > 1:
-                    arch = (agents[0].internal_channels, agents[0].res_depth)
+                    arch = getattr(agents[0], 'arch_spec', None) \
+                        or (agents[0].internal_channels, agents[0].res_depth)
                     state = {k: v.cpu() for k, v in agents[0].state_dict().items()}
                     best_state = {k: v.cpu() for k, v in best_model.state_dict().items()}
                     score = TestParallel(state, arch, 'model', best_state, engine.depth,
