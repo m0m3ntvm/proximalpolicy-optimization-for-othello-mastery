@@ -4,9 +4,11 @@ Zero engine input. Each chunk is a sequence of consecutive random-play
 positions; the input is heavily masked and the model reconstructs the full
 sequence:
 
-  tube masking   the same spatial blocks (quarters of the board) are masked
-                 across ALL frames, so adjacent near-duplicate frames cannot
-                 leak the answer — the encoder must reason about the position
+  tube masking   each of the 4 board quarters is dropped with probability
+                 --block-drop (0.5) independently PER CHUNK, and the same
+                 quarters are masked across ALL frames — so adjacent
+                 near-duplicate frames cannot leak the answer, while some
+                 chunks end fully masked and others untouched
   future frames  the last --future-frames frames are masked completely:
                  reconstructing them forces the encoder to learn the game's
                  MOVE DYNAMICS, not just per-frame inpainting
@@ -96,15 +98,17 @@ def batches(x, mask, out, idx, batch_size):
                torch.from_numpy(out[i]))
 
 
-def build_keep(B, L, mask_blocks, future_frames):
-    """Tube-masked keep indicator: same quarter-blocks masked in every frame,
-    plus the last `future_frames` frames masked completely. 1 = visible."""
+def build_keep(B, L, block_drop, future_frames):
+    """Tube-masked keep indicator: per chunk, each of the 4 quarter-blocks is
+    dropped with probability `block_drop` and masked in EVERY frame (tube
+    masking, so adjacent near-duplicate frames cannot leak the answer — some
+    chunks come out fully masked, others untouched), plus the last
+    `future_frames` frames masked completely. 1 = visible."""
     keep = torch.ones(B, L, 1, 8, 8)
-    for b in range(B):
-        dropped = np.random.choice(4, size=mask_blocks, replace=False)
-        for blk in dropped:
-            r0, c0 = (blk // 2) * 4, (blk % 2) * 4
-            keep[b, :, :, r0:r0 + 4, c0:c0 + 4] = 0.0
+    drop = torch.rand(B, 4) < block_drop          # (B, 4) per-chunk quarter coins
+    for blk in range(4):
+        r0, c0 = (blk // 2) * 4, (blk % 2) * 4
+        keep[drop[:, blk], :, :, r0:r0 + 4, c0:c0 + 4] = 0.0
     if future_frames > 0:
         keep[:, -future_frames:] = 0.0
     return keep
@@ -119,8 +123,8 @@ def main():
     ap.add_argument('--learning-rate', type=float, default=1e-3)
     ap.add_argument('--legality-coef', type=float, default=0.5)
     ap.add_argument('--value-coef', type=float, default=0.5)
-    ap.add_argument('--mask-blocks', type=int, default=2,
-                    help='how many of the 4 quarter-blocks to tube-mask (2 = 50%)')
+    ap.add_argument('--block-drop', type=float, default=0.5,
+                    help='per-chunk dropout probability for each quarter-block (tube-masked)')
     ap.add_argument('--future-frames', type=int, default=3,
                     help='trailing frames of each chunk masked completely')
     ap.add_argument('--max-samples', type=int, default=None)
@@ -164,7 +168,7 @@ def main():
         for xb, mb, ob in batches(x, mask, out, idx, args.batch_size):
             B = len(xb)
             xb, mb, ob = xb.to(device), mb.to(device), ob.to(device)
-            keep = build_keep(B, L, args.mask_blocks, args.future_frames).to(device)
+            keep = build_keep(B, L, args.block_drop, args.future_frames).to(device)
             visible = keep.view(B, L, -1).sum(dim=2) > 0   # (B, L) frames with info left
             if train:
                 optim.zero_grad(set_to_none=True)
