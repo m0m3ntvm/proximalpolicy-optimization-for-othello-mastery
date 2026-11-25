@@ -69,21 +69,42 @@ class OthelloRL(Module):
 
         self.softmax = nn.Softmax(dim=1)
 
+        # shared value head: reads the trunk features + the policy output, so
+        # the encoder is shared between both heads (the legacy separate
+        # value_net stays for old checkpoints, see forward/load)
+        self.value_head = nn.Sequential(
+            nn.Conv2d(in_channels=internal_channels + 1, out_channels=64,
+                      kernel_size=(3, 3), padding=1, bias=False),
+            nn.GroupNorm(num_groups=4, num_channels=64, affine=True),
+            nn.LeakyReLU(),
+            ResidualBlock(channels=64),
+            nn.AdaptiveAvgPool2d(4),
+            nn.Flatten(),
+            nn.Linear(in_features=1024, out_features=1),
+            nn.Tanh(),
+        )
+
     ##############################
     def forward(self, input, mask):
         x = input
         x = self.InConv(x)
         x = self.ResidualBlock(x)
+        trunk = x
         x = self.OutConv(x)
         # Apply masking to prevent choosing already chosen positions
         x = x * mask + (1 - mask) * -1e32  # Set chosen positions to a large negative value
-        x = self.softmax(x.view(x.size(0), -1)).view(x.size())
+        policy = self.softmax(x.view(x.size(0), -1)).view(x.size())
 
         if self.return_val:
-            value = self.value_net(torch.cat((input, x), axis=1))
-            return x, value
+            if hasattr(self, 'value_head'):
+                # shared encoder: the value head reads trunk features + policy
+                value = self.value_head(torch.cat((trunk, policy), axis=1))
+            else:
+                # legacy checkpoints keep the old separate value network
+                value = self.value_net(torch.cat((input, policy), axis=1))
+            return policy, value
 
-        return x
+        return policy
 
     ###############################
     def save(self, path):
@@ -100,6 +121,10 @@ class OthelloRL(Module):
         try:
             loaded_model = torch.load(path, map_location=self.device, weights_only=False)
             self.__dict__.update(loaded_model.__dict__)  # Update current instance with loaded model's attributes
+            if not hasattr(loaded_model, 'value_head'):
+                # legacy checkpoint without the shared value head: fall back to
+                # its separate value network in forward()
+                self.__dict__.pop('value_head', None)
             return True
 
         except Exception as e:
