@@ -226,6 +226,10 @@ def main():
                              'much faster on GPUs.')
     parser.add_argument('--epochs-per-step', type=int, default=1)
     parser.add_argument('--load-checkpoint', action='store_true', help='resume from save-dir')
+    parser.add_argument('--init-path', type=str, default=None,
+                        help='state_dict (e.g. scripts/pretrain_distill.py output) to '
+                             'initialize BOTH agents with instead of random weights; '
+                             'architecture flags must match')
     parser.add_argument('--save-dir', type=str, default='training_checkpoints',
                         help='directory for models/logs (created if missing)')
     parser.add_argument('--ref-path', type=str, default=None,
@@ -296,6 +300,14 @@ def main():
     # Create 2 instances of OthelloRL (new = training, old = behavior policy)
     agents = [OthelloRL(internal_channels=internal_channels, res_depth=policy_net_depth, name="new", return_val=True),
               OthelloRL(internal_channels=internal_channels, res_depth=policy_net_depth, name="old", return_val=True)]
+
+    if args.init_path:
+        # warm start both agents from distilled weights (policy + value heads);
+        # state_dict keys must match the --internal-channels/--policy-net-depth flags
+        init_state = torch.load(args.init_path, map_location='cpu', weights_only=True)
+        agents[0].load_state_dict(init_state)
+        agents[1].load_state_dict(init_state)
+        print(f"initialized both agents from {args.init_path}")
 
     if load_check_point:
         try:

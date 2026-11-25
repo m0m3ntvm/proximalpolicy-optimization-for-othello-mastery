@@ -20,3 +20,6 @@ runs/
 
 # SSH keys (never commit private keys)
 keys/
+
+# Distillation data shards
+data/

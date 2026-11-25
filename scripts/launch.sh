@@ -31,6 +31,7 @@ ARCH="${ARCH:---internal-channels 128 --policy-net-depth 16}"
 SAVE_DIR="${SAVE_DIR:-runs/run_$(date +%Y%m%d_%H%M%S)}"
 RESUME="${RESUME:-0}"
 EXTRA="${EXTRA:-}"
+INIT_PATH="${INIT_PATH:-}"    # distill warm-start checkpoint for train.py --init-path
 
 # ------------------------- environment -------------------------
 if ! command -v uv >/dev/null 2>&1; then
@@ -71,10 +72,13 @@ ARGS=(--steps "$STEPS" --games-per-step "$GAMES_PER_STEP" --batch-games "$BATCH_
 if [ "$RESUME" = "1" ]; then
     ARGS+=(--resume)
 fi
-# ARCH and EXTRA are train.py flags: pass them through the launcher's bare --
+# ARCH, INIT_PATH and EXTRA are train.py flags: pass them through the launcher's bare --
 ARGS+=(--)
 read -r -a ARCH_ARGS <<< "$ARCH"
 ARGS+=("${ARCH_ARGS[@]}")
+if [ -n "$INIT_PATH" ]; then
+    ARGS+=(--init-path "$INIT_PATH")
+fi
 if [ -n "$EXTRA" ]; then
     read -r -a EXTRA_ARGS <<< "$EXTRA"
     ARGS+=("${EXTRA_ARGS[@]}")
