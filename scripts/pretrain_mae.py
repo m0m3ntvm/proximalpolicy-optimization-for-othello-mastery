@@ -34,7 +34,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from othello.models.factory import make_agent
+from othello.models.factory import (compile_blocks, make_agent, parallelize,
+                                     unwrap)
 
 
 class MAEModel(nn.Module):
@@ -131,16 +132,21 @@ def main():
                     help='trailing frames of each chunk masked completely')
     ap.add_argument('--max-samples', type=int, default=None)
     ap.add_argument('--arch', type=str, default='convnext',
-                    choices=('convnext', 'vim', 'xlstm'),
+                    choices=('convnext', 'transformer', 'lstm', 'mamba'),
                     help='encoder architecture (must match train.py --arch)')
     ap.add_argument('--internal-channels', type=int, default=128,
                     help='convnext arch: must match train.py launch flags')
     ap.add_argument('--policy-net-depth', type=int, default=16,
                     help='convnext arch: must match train.py launch flags')
-    ap.add_argument('--model-dim', type=int, default=192,
-                    help='vim/xlstm arch: token embedding width')
-    ap.add_argument('--layers', type=int, default=8,
-                    help='vim/xlstm arch: number of SSM/LSTM blocks')
+    ap.add_argument('--model-dim', type=int, default=None,
+                    help='transformer/lstm/mamba token embedding width '
+                         '(defaults: 256 transformer / 512 lstm / 896 mamba)')
+    ap.add_argument('--layers', type=int, default=None,
+                    help='transformer/lstm/mamba block count '
+                         '(defaults: 16 transformer / 6 lstm / 2 mamba)')
+    ap.add_argument('--compile-blocks', action='store_true',
+                    help='torch.compile each encoder block (fuses the '
+                         'mamba SSM scan; matches train.py --compile-blocks)')
     ap.add_argument('--out', type=str, default='checkpoints/mae_pretrain.pth')
     ap.add_argument('--seed', type=int, default=42)
     args = ap.parse_args()
@@ -159,10 +165,14 @@ def main():
 
     model = MAEModel(args.arch, args.internal_channels, args.policy_net_depth,
                      args.model_dim, args.layers).to(device)
+    model = parallelize(model)  # split each batch across all GPUs (no-op with one)
+    if args.compile_blocks:
+        compile_blocks(unwrap(model).encoder)
+    enc = unwrap(model).encoder
     n_params = sum(p.numel() for p in model.parameters())
-    arch_desc = (f'{args.internal_channels} channels x {args.policy_net_depth} blocks'
+    arch_desc = (f'{enc.internal_channels} channels x {enc.res_depth} blocks'
                  if args.arch == 'convnext' else
-                 f'{args.model_dim} dim x {args.layers} layers')
+                 f'{enc.model_dim} dim x {enc.n_layers} layers')
     print(f'architecture: {args.arch} ({arch_desc}, {n_params / 1e6:.1f}M params '
           f'incl. decoder).')
 
@@ -239,7 +249,7 @@ def main():
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.encoder.state_dict(), out_path)
+    torch.save(unwrap(model).encoder.state_dict(), out_path)  # clean keys, no 'module.' prefix
     print(f'saved encoder state_dict ({out_path.stat().st_size / 1e6:.1f} MB) to {out_path}')
     print('load into train.py with --init-path (same architecture flags).')
 

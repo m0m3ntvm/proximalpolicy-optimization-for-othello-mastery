@@ -1,19 +1,23 @@
-"""Encoder architecture tests: Vim / xLSTM must satisfy the same duck-type
-contract as OthelloRL (masked-softmax policy, shared-trunk value head,
-state_dict round-trip through the factory, numerical stability) so the
-MAE and RL pipelines can swap architectures behind a single --arch flag."""
+"""Encoder architecture tests: Transformer / LSTM / Mamba must satisfy the
+same duck-type contract as OthelloRL (masked-softmax policy, shared-trunk
+value head, state_dict round-trip through the factory, numerical stability)
+so the MAE and RL pipelines can swap architectures behind a single --arch
+flag. All challenger arms are sized to match the convnext 128x16 arm
+(~13M params)."""
 import numpy as np
 import pytest
 import torch
 
 from othello.models.base import scan_orders
-from othello.models.factory import make_agent, make_from_spec
+from othello.models.factory import (AgentParallel, make_agent, make_from_spec,
+                                     parallelize, unwrap)
 
 # tiny sizes so the suite stays CPU-friendly
 TINY = [
     ("convnext", dict(internal_channels=32, res_depth=2)),
-    ("vim", dict(model_dim=32, n_layers=2)),
-    ("xlstm", dict(model_dim=32, heads=4, n_layers=2)),
+    ("transformer", dict(model_dim=32, n_layers=2, heads=4)),
+    ("lstm", dict(model_dim=32, n_layers=2)),
+    ("mamba", dict(model_dim=32, n_layers=2, d_state=4, expand=1)),
 ]
 
 
@@ -92,13 +96,15 @@ def test_state_dict_round_trip_via_factory(arch, kwargs):
 
 
 @pytest.mark.parametrize("arch,kwargs", [
-    ("vim", dict()),
-    ("xlstm", dict()),
+    ("transformer", dict()),
+    ("lstm", dict()),
+    ("mamba", dict()),
 ])
 def test_default_param_budget(arch, kwargs):
+    """Default configs land within ~20% of the convnext 128x16 arm (13.5M)."""
     m = make_agent(arch=arch, **kwargs)
     n = sum(p.numel() for p in m.parameters())
-    assert 1.5e6 < n < 8e6, f"{arch} has {n:,} params, expected 2-4M range"
+    assert 8e6 < n < 20e6, f"{arch} has {n:,} params, expected ~13M"
 
 
 def test_scan_orders_are_distinct_permutations():
@@ -110,8 +116,9 @@ def test_scan_orders_are_distinct_permutations():
 
 
 @pytest.mark.parametrize("arch,kwargs", [
-    ("vim", dict(model_dim=32, n_layers=2)),
-    ("xlstm", dict(model_dim=32, heads=4, n_layers=2)),
+    ("transformer", dict(model_dim=32, n_layers=2, heads=4)),
+    ("lstm", dict(model_dim=32, n_layers=2)),
+    ("mamba", dict(model_dim=32, n_layers=2, d_state=4, expand=1)),
 ])
 def test_numerical_stability_on_large_inputs(arch, kwargs):
     m = make_agent(arch=arch, name="q", return_val=True, **kwargs)
@@ -119,3 +126,37 @@ def test_numerical_stability_on_large_inputs(arch, kwargs):
     policy, value = m(x * 20.0, mask)  # large logits stress the exp gates
     assert torch.isfinite(policy).all()
     assert torch.isfinite(value).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(),
+                    reason="DataParallel requires a CUDA device")
+def test_agentparallel_delegates_and_unwraps():
+    m = make_agent(arch="transformer", model_dim=32, n_layers=2, heads=4,
+                   name="q", return_val=True)
+    wrapped = AgentParallel(m)
+    # reads delegate to the inner model (duck-type contract)
+    assert wrapped.arch_spec == m.arch_spec
+    assert wrapped.name == "q"
+    assert wrapped.return_val is True
+    assert wrapped.trunk_channels == m.trunk_channels
+    # writes to the two mutated duck attrs are routed to the inner model
+    wrapped.return_val = False
+    wrapped.name = "z"
+    assert m.return_val is False
+    assert m.name == "z"
+    # state_dict: wrapper-prefixed on the DP object, clean after unwrap
+    assert all(k.startswith("module.") for k in wrapped.state_dict())
+    assert set(unwrap(wrapped).state_dict()) == set(m.state_dict())
+    # unwrap is idempotent
+    assert unwrap(wrapped) is m
+    assert unwrap(m) is m
+
+
+def test_parallelize_is_noop_on_single_gpu():
+    m = make_agent(arch="lstm", model_dim=32, n_layers=2)
+    out = parallelize(m)
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        assert isinstance(out, AgentParallel)
+        assert unwrap(out) is m
+    else:
+        assert out is m  # single-GPU hot path untouched

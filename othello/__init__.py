@@ -10,9 +10,12 @@ from othello.game.rules import board_hash, decide, evaluate, get_valid_moves
 from othello.models.agent import OthelloRL, value_Net
 from othello.models.attention import CBAM, ChannelAttention, SpatialAttention
 from othello.models.blocks import ResidualBlock
-from othello.models.factory import ARCHS, make_agent, make_from_spec
-from othello.models.vim import VimEncoder
-from othello.models.xlstm import XLSTMEncoder
+from othello.models.factory import (ARCHS, AgentParallel, compile_blocks,
+                                     make_agent, make_from_spec, parallelize,
+                                     unwrap)
+from othello.models.lstm import LSTMEncoder
+from othello.models.mamba import MambaEncoder
+from othello.models.transformer import TransformerEncoder
 from othello.rl.ppo import PPO_Loss
 from othello.rl.selfplay import asyncSelfPlay, parallelSelfPlay
 from othello.search.minimax import miniMax
@@ -33,9 +36,14 @@ __all__ = [
     "decide",
     "asyncSelfPlay",
     "parallelSelfPlay",
-    "VimEncoder",
-    "XLSTMEncoder",
+    "TransformerEncoder",
+    "LSTMEncoder",
+    "MambaEncoder",
     "make_agent",
     "make_from_spec",
+    "AgentParallel",
+    "parallelize",
+    "unwrap",
+    "compile_blocks",
     "ARCHS",
 ]

@@ -31,7 +31,8 @@ except ImportError:
     SummaryWriter = None  # checked in main() with a clear message
 
 from othello import OthelloBoard, OthelloRL, PPO_Loss, miniMax, parallelSelfPlay
-from othello.models.factory import make_agent, make_from_spec
+from othello.models.factory import (compile_blocks, make_agent, make_from_spec,
+                                     parallelize, unwrap)
 
 
 def calcEpsilon(step, epsilon_max, epsilon_min, scale_fac, steps):
@@ -39,11 +40,12 @@ def calcEpsilon(step, epsilon_max, epsilon_min, scale_fac, steps):
 
 
 def Test(agent_A, agent_B=None, test_num=250, board_base_size=8, num_boards=1):
-    # model to evaluation mode
-    agent_A.cpu().eval()
+    # model to evaluation mode (plain modules — DataParallel wrappers would
+    # only slow down the serial CPU path)
+    agent_A = unwrap(agent_A).cpu().eval()
     agent_A.return_val = False
     if agent_B:
-        agent_B.cpu().eval()
+        agent_B = unwrap(agent_B).cpu().eval()
         agent_B.return_val = False
 
     score = np.array([0, 0])
@@ -74,7 +76,8 @@ def RunTests(Q, ref, engine, win_trace, test_num, eval_workers=1, engine_workers
     #####################################################################
     arch = getattr(Q, 'arch_spec', None) or (Q.internal_channels, Q.res_depth)
     if eval_workers > 1:
-        state = {k: v.cpu() for k, v in Q.state_dict().items()}
+        # clean keys (no DataParallel 'module.' prefix) for the spawn workers
+        state = {k: v.cpu() for k, v in unwrap(Q).state_dict().items()}
         score_random = TestParallel(state, arch, 'random', None, engine.depth,
                                     engine_workers, test_num, eval_workers)
         win_trace['Agent_vs_Random'].append(round((score_random[0] / (score_random[0] + score_random[1])) * 100, 4))
@@ -161,7 +164,7 @@ def fit_ppo(data_loader, agents, loss_dict, optim, scheduler, device, epochs_per
     agents[0].to(device).train()  # model to training mode
     agents[1].to(device).eval()  # model to evaluation mode
     ##############################
-    model_clone = copy.deepcopy(agents[0])  # later the old model
+    model_clone = copy.deepcopy(unwrap(agents[0]))  # later the old model
     ##############################
     agents[0].return_val = True
     agents[1].return_val = False
@@ -248,14 +251,21 @@ def main():
     parser.add_argument('--internal-channels', type=int, default=64)
     parser.add_argument('--policy-net-depth', type=int, default=8)
     parser.add_argument('--arch', type=str, default='convnext',
-                        choices=('convnext', 'vim', 'xlstm'),
+                        choices=('convnext', 'transformer', 'lstm', 'mamba'),
                         help='encoder architecture (--internal-channels/'
                              '--policy-net-depth apply to convnext; '
-                             '--model-dim/--layers to vim/xlstm)')
-    parser.add_argument('--model-dim', type=int, default=192,
-                        help='vim/xlstm token embedding width')
-    parser.add_argument('--layers', type=int, default=8,
-                        help='vim/xlstm number of SSM/LSTM blocks')
+                             '--model-dim/--layers to the token archs — '
+                             'unset = per-arch ~13M-param defaults)')
+    parser.add_argument('--model-dim', type=int, default=None,
+                        help='transformer/lstm/mamba token embedding width '
+                             '(defaults: 256 transformer / 512 lstm / 896 mamba)')
+    parser.add_argument('--layers', type=int, default=None,
+                        help='transformer/lstm/mamba block count '
+                             '(defaults: 16 transformer / 6 lstm / 2 mamba)')
+    parser.add_argument('--compile-blocks', action='store_true',
+                        help='torch.compile each encoder block (fuses the '
+                             'mamba SSM scan — fixed batch shapes keep the '
+                             'compile cache hot)')
     parser.add_argument('--value-coefficient', type=float, default=0.5)
     parser.add_argument('--entropy-coefficient', type=float, default=0.09)
     parser.add_argument('--clip-param', type=float, default=0.2)
@@ -341,8 +351,15 @@ def main():
             print(f"WARNING: reference model {args.ref_path} failed to load; skipping vs-ref tests.")
             ref = None
 
-    # best checkpoint
-    best_model = copy.deepcopy(agents[0])
+    # multi-GPU: split each forward across all devices (no-op on single-GPU
+    # machines, so the dev-box hot path is unchanged)
+    agents = [parallelize(a) for a in agents]
+    if args.compile_blocks:
+        agents = [compile_blocks(a) for a in agents]
+
+    # best checkpoint: plain module (deepcopy of a DataParallel wrapper would
+    # drag the wrapper state along)
+    best_model = copy.deepcopy(unwrap(agents[0]))
     best_model.name = "best_model"
 
     agents[0] = agents[0].to(device)
@@ -393,7 +410,7 @@ def main():
             print(e)
 
     print(f"summary of model : {agents[0].name}")
-    summary(agents[0], [(2, 8, 8), (1, 8, 8)])
+    summary(unwrap(agents[0]), [(2, 8, 8), (1, 8, 8)])
 
     agents[0].return_val = False
     agents[1].return_val = False
@@ -457,7 +474,7 @@ def main():
                 if eval_workers > 1:
                     arch = getattr(agents[0], 'arch_spec', None) \
                         or (agents[0].internal_channels, agents[0].res_depth)
-                    state = {k: v.cpu() for k, v in agents[0].state_dict().items()}
+                    state = {k: v.cpu() for k, v in unwrap(agents[0]).state_dict().items()}
                     best_state = {k: v.cpu() for k, v in best_model.state_dict().items()}
                     score = TestParallel(state, arch, 'model', best_state, engine.depth,
                                          engine_workers, test_num, eval_workers)
