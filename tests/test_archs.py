@@ -1,8 +1,8 @@
-"""Encoder architecture tests: Transformer / LSTM / Mamba must satisfy the
-same duck-type contract as OthelloRL (masked-softmax policy, shared-trunk
-value head, state_dict round-trip through the factory, numerical stability)
-so the MAE and RL pipelines can swap architectures behind a single --arch
-flag. All challenger arms are sized to match the convnext 128x16 arm
+"""Encoder architecture tests: Transformer / LSTM must satisfy the same
+duck-type contract as OthelloRL (masked-softmax policy, shared-trunk value
+head, state_dict round-trip through the factory, numerical stability) so
+the MAE and RL pipelines can swap architectures behind a single --arch
+flag. The challenger arms are sized to match the convnext 128x16 arm
 (~13M params)."""
 import numpy as np
 import pytest
@@ -17,7 +17,6 @@ TINY = [
     ("convnext", dict(internal_channels=32, res_depth=2)),
     ("transformer", dict(model_dim=32, n_layers=2, heads=4)),
     ("lstm", dict(model_dim=32, n_layers=2)),
-    ("mamba", dict(model_dim=32, n_layers=2, d_state=4, expand=1)),
 ]
 
 
@@ -98,7 +97,6 @@ def test_state_dict_round_trip_via_factory(arch, kwargs):
 @pytest.mark.parametrize("arch,kwargs", [
     ("transformer", dict()),
     ("lstm", dict()),
-    ("mamba", dict()),
 ])
 def test_default_param_budget(arch, kwargs):
     """Default configs land within ~20% of the convnext 128x16 arm (13.5M)."""
@@ -118,7 +116,6 @@ def test_scan_orders_are_distinct_permutations():
 @pytest.mark.parametrize("arch,kwargs", [
     ("transformer", dict(model_dim=32, n_layers=2, heads=4)),
     ("lstm", dict(model_dim=32, n_layers=2)),
-    ("mamba", dict(model_dim=32, n_layers=2, d_state=4, expand=1)),
 ])
 def test_numerical_stability_on_large_inputs(arch, kwargs):
     m = make_agent(arch=arch, name="q", return_val=True, **kwargs)

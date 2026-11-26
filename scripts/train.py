@@ -31,8 +31,8 @@ except ImportError:
     SummaryWriter = None  # checked in main() with a clear message
 
 from othello import OthelloBoard, OthelloRL, PPO_Loss, miniMax, parallelSelfPlay
-from othello.models.factory import (compile_blocks, make_agent, make_from_spec,
-                                     parallelize, unwrap)
+from othello.models.factory import (make_agent, make_from_spec, parallelize,
+                                     unwrap)
 
 
 def calcEpsilon(step, epsilon_max, epsilon_min, scale_fac, steps):
@@ -251,21 +251,17 @@ def main():
     parser.add_argument('--internal-channels', type=int, default=64)
     parser.add_argument('--policy-net-depth', type=int, default=8)
     parser.add_argument('--arch', type=str, default='convnext',
-                        choices=('convnext', 'transformer', 'lstm', 'mamba'),
+                        choices=('convnext', 'transformer', 'lstm'),
                         help='encoder architecture (--internal-channels/'
                              '--policy-net-depth apply to convnext; '
                              '--model-dim/--layers to the token archs — '
                              'unset = per-arch ~13M-param defaults)')
     parser.add_argument('--model-dim', type=int, default=None,
-                        help='transformer/lstm/mamba token embedding width '
-                             '(defaults: 256 transformer / 512 lstm / 896 mamba)')
+                        help='transformer/lstm token embedding width '
+                             '(defaults: 256 transformer / 512 lstm)')
     parser.add_argument('--layers', type=int, default=None,
-                        help='transformer/lstm/mamba block count '
-                             '(defaults: 16 transformer / 6 lstm / 2 mamba)')
-    parser.add_argument('--compile-blocks', action='store_true',
-                        help='torch.compile each encoder block (fuses the '
-                             'mamba SSM scan — fixed batch shapes keep the '
-                             'compile cache hot)')
+                        help='transformer/lstm block count '
+                             '(defaults: 16 transformer / 6 lstm)')
     parser.add_argument('--value-coefficient', type=float, default=0.5)
     parser.add_argument('--entropy-coefficient', type=float, default=0.09)
     parser.add_argument('--clip-param', type=float, default=0.2)
@@ -354,8 +350,6 @@ def main():
     # multi-GPU: split each forward across all devices (no-op on single-GPU
     # machines, so the dev-box hot path is unchanged)
     agents = [parallelize(a) for a in agents]
-    if args.compile_blocks:
-        agents = [compile_blocks(a) for a in agents]
 
     # best checkpoint: plain module (deepcopy of a DataParallel wrapper would
     # drag the wrapper state along)

@@ -7,7 +7,7 @@ save/load semantics (full-object pickles + __dict__.update, the
 pickles stay byte-compatible.
 
 The base also owns everything the token-based encoders (Transformer / LSTM
-/ Mamba) share: 2ch-per-square embedding + learned positional encoding,
+/ LSTM) share: 2ch-per-square embedding + learned positional encoding,
 layer norm, the policy head, the fixed-128-channel trunk map projection
 (the MAE 3D-conv decoder is identical across architectures), the
 shared-trunk value head, and the masked-softmax forward(). Subclasses only
