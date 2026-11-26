@@ -69,7 +69,15 @@ class MAEModel(nn.Module):
         xf = x_masked.view(B * L, 2, 8, 8)
         mf = mask.view(B * L, 1, 8, 8)
         trunk, logits = self.encoder.features(xf)
-        policy, value = self.encoder.forward(xf, mf)
+        # policy/value are derived from the SAME trunk pass — calling
+        # encoder.forward() would recompute the whole encoder (2x compute and
+        # 2x activation memory, which OOM'd batch-64 convnext MAE on the 32GB
+        # box). Equivalent by construction: masked softmax of the logits +
+        # shared value_head(trunk, policy), matching agent.py forward() and
+        # TokenEncoderBase.forward() exactly.
+        masked = logits * mf + (1 - mf) * -1e32
+        policy = masked.view(B * L, -1).softmax(dim=1).view(masked.size())
+        value = self.encoder.value_head(torch.cat((trunk, policy), dim=1))
         # Conv3d layout (B, C, L, H, W): move the frame dim into channel position
         feats3 = trunk.view(B, L, -1, 8, 8).permute(0, 2, 1, 3, 4)
         keep3 = keep.permute(0, 2, 1, 3, 4)
@@ -195,7 +203,8 @@ def main():
             visible = keep.view(B, L, -1).sum(dim=2) > 0   # (B, L) frames with info left
             if train:
                 optim.zero_grad(set_to_none=True)
-            logits, policy, value, recon = model(xb, mb, keep)
+            with torch.set_grad_enabled(train):
+                logits, policy, value, recon = model(xb, mb, keep)
             # recon: CE on masked cells only (tube blocks on visible frames +
             # everything on the fully-masked future frames)
             target = (xb[:, :, 0].long() + 1)                                  # (B, L, 8, 8)
